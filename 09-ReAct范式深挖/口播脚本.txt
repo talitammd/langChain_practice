@@ -1,0 +1,17 @@
+面试官说："给你一个复杂问题，Agent 循环里到底是怎么一步一步推理并调用工具的？手写一个 ReAct 循环给我看。"这道题刷掉了大量候选人，因为很多人只会调框架 API，根本说不清底层那三个字母：Thought、Action、Observation。今天这一节，我们就把 ReAct 范式拆到最底层。
+
+上一节我们定义了 Agent——模型自己决定走哪条路、调什么工具、什么时候停。那具体怎么决定？它脑子里的"操作系统"是什么？答案就是 ReAct：Reasoning 加 Acting，思考和行动交替进行的循环范式。
+
+ReAct 这个名字来自 2022 年 Yao 等人的论文，全称 Reasoning and Acting。核心思想只有一句话：让模型在每一步先产出一段思考过程，再决定要执行什么动作，然后把动作的结果喂回来，继续下一轮思考。这就形成了一个 Thought、Action、Observation 的三步循环。
+
+我们用一个具体例子来走一遍。假设用户问："北京今天的气温是多少摄氏度？"模型第一步产出 Thought："用户想知道北京今天的气温，我需要调用天气查询工具。"第二步产出 Action："调用 get_weather，参数 city 等于北京。"系统执行这个工具调用，拿到结果比如"32度"，这就是 Observation。模型看到 Observation 后进入下一轮 Thought："我已经拿到了北京今天的气温是 32 度，可以直接回答用户了。"然后产出最终答案，循环结束。
+
+所以 ReAct 的本质就是：想一步、做一步、看一步，再想下一步。它不是一次性规划好所有步骤然后执行，而是每一步都根据上一步的实际结果来动态决策。这和纯 Chain-of-Thought 最大的区别在哪？CoT 只有 Thought 没有 Action——它让模型想得很深但不能和外部世界交互；而 ReAct 把推理和行动绑在一起，模型既能想又能做，做完还能根据结果修正自己的想法。
+
+那 ReAct 和我们之前学的 Function Calling 是什么关系？本质上，Function Calling 是 ReAct 的工业级结构化实现。ReAct 原始论文里，Thought 和 Action 都是纯文本——模型用自然语言写"Action: search[北京天气]"，然后靠正则去解析。这个方式很脆弱，格式稍微错一点就解析失败。Function Calling 把这个过程标准化了：Action 变成了结构化的 JSON，模型不用自己写格式，API 直接返回工具名和参数。但底层的循环逻辑是一样的：模型推理、决定调工具、拿到结果、继续推理。所以你可以说 Function Calling 是 ReAct 模式穿上了生产级盔甲。
+
+面试官经常追问的一个点是 ReAct 的局限性。第一，长循环容易跑偏。当 Thought-Action-Observation 循环超过七八轮之后，模型的注意力开始漂移，前面的推理可能被遗忘或者歪曲,这就是为什么我们上一节要设 max_turns 安全阀。第二，不擅长长期规划。ReAct 是逐步贪心的——每一步只看当前状态决定下一步，没有全局的任务分解。所以对于特别复杂的任务，业界会在 ReAct 外面再套一层 Plan-and-Execute 架构：先用一个规划 Agent 把大任务拆成子任务列表,然后每个子任务内部再跑 ReAct 循环。第三，对 Prompt 格式敏感。ReAct 依赖模型严格按照 Thought、Action、Observation 的格式产出，一旦模型跳格式，整个循环就断了。Function Calling 通过 API 层面的强约束解决了这个问题。
+
+最后总结三句话带走。第一，ReAct 等于 Reasoning 加 Acting：Thought 想一步、Action 做一步、Observation 看结果，三步循环直到任务完成。第二，它和 CoT 的本质区别是 CoT 只能想不能做，ReAct 边想边做边修正；它和 Function Calling 的关系是 FC 把 ReAct 的文本 Action 结构化成了 JSON 调用，是生产级升级。第三，局限性包括长循环注意力漂移、逐步贪心缺乏全局规划、格式敏感易断——这些催生了 Plan-and-Execute 等更高级的架构模式。
+
+定义有了、核心循环拆清楚了，那下一步就是动手。下一节我们进入 LangChain 实战——用框架把我们前面手写的 Agent 重新实现一遍，你会看到框架到底帮你封装了 ReAct 循环里的哪些脏活，以及什么时候该用框架、什么时候该手写。

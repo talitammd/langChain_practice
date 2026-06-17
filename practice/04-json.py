@@ -1,23 +1,58 @@
 # 示例 1：Pydantic 定义 + OpenAI Structured Outputs
+from ast import Set
 import json
+from datetime import date
+import os
+
 # pydantic 数据验证和序列化库。定义数据模型（类），自动做类型检查、转换、验证，还能生成 JSON Schema。
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from openai import OpenAI
 
 
 # 使用 Qwen API（兼容 OpenAI 格式）
 client = OpenAI(
-    api_key="sk-bf3e4253e80048d898629a645d78b378",  # 替换成你的 Qwen API Key
+    api_key=os.getenv("QWEN_API_KEY"),  # 替换成你的 Qwen API Key
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
 )
+
 
 # Pydantic v2 要求所有字段必须有类型注解
 class Invoice(BaseModel):
     """发票信息抽取结果"""
+
     vendor: str = Field(description="开票方名称")
     amount: float = Field(description="金额")
     date: str = Field(description="开票日期，YYYY-MM-DD")
     items: list[str] = Field(default_factory=list, description="商品明细")
+
+
+class WeatherQuery(BaseModel):
+    city: str = Field(description="城市")
+    date: str = Field(default=date.today().isoformat())
+    unit: str = Field(description="单位")
+
+    @field_validator("unit")
+    @classmethod
+    def check_unit(cls, s):
+        if s not in ["c", "f"]:
+            raise ValidationError("单位必须是c或者f")
+        return s
+
+
+class Article(BaseModel):
+    title: str = Field(description="标题")
+    tag_list: list[str] = Field(description="标签列表")
+    count: int = Field(description="字数")
+
+    @field_validator("tag_list")
+    @classmethod
+    def check_tag_list(cls, v):
+        unique_tags = set(v)
+        if len(unique_tags) > 5:
+            raise ValidationError("标签列表不能超过5个")
+        if len(v) != len(unique_tags):
+            raise ValidationError("标签列表不能重复")
+        return list(unique_tags)
 
 
 # 让模型输出 JSON，再解析成 Pydantic 对象
@@ -54,7 +89,7 @@ class Person(BaseModel):
     age: int
 
 
-def parse_with_retry(call_llm, prompt, model_cls, max_retries=3):
+def parse_with_retry(call_llm, prompt, model_cls, on_fail, max_retries=3):
     """通用兜底：校验失败把错误塞回模型让它改"""
     last_err = None
     # Qwen 要求消息里必须包含 "json" 字样才能用 response_format={"type": "json_object"}
@@ -62,7 +97,7 @@ def parse_with_retry(call_llm, prompt, model_cls, max_retries=3):
         {"role": "system", "content": "请返回 JSON 格式数据"},
         {"role": "user", "content": prompt},
     ]
-    for attempt in range(max_retries):
+    for _ in range(max_retries):
         raw = call_llm(msgs)
         try:
             return model_cls.model_validate_json(raw)
@@ -77,7 +112,7 @@ def parse_with_retry(call_llm, prompt, model_cls, max_retries=3):
                 }
             )
             print(msgs)
-    raise RuntimeError(f"重试{max_retries}次扔失败：{last_err}")
+    on_fail(prompt, last_err)
 
 
 # 演示用 mock：第一次返回坏数据，第二次返回正确
@@ -100,7 +135,13 @@ class MockLLM:
         return resp.choices[0].message.content
 
 
-person = parse_with_retry(MockLLM(), "抽取姓名和年龄：name=张三，age=26", Person)
+def on_fail(prompt, err):
+    return f"不好意思，你的要求{prompt}，我做不到，报错了：{err}"
+
+
+person = parse_with_retry(
+    MockLLM(), "抽取姓名和年龄：name=张三，age=26", Person, on_fail
+)
 print(person.age)  # 25，第二次重试成功
 
 # [{'role': 'user', 'content': '抽取姓名和年龄'}, {'role': 'assistant', 'content': '为了帮助你抽取姓名和年龄，我需要一段具体的文本作为例子。请提供包含姓名和年龄信息的一段文字，这样我可以更准确地示范如何从中提取这些信息。'}, {'role': 'user', 'content': "上面的输出不符合要求，校验错误如下，请仅输出修正后的合法 JSON：\n1 validation error for Person\n  Invalid JSON: expected value at line 1 column 1 [type=json_invalid, input_value='为了帮助你抽取姓...提取这些信息。', input_type=str]\n    For further information visit https://errors.pydantic.dev/2.11/v/json_invalid"}]
