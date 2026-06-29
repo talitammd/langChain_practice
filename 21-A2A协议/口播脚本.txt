@@ -1,0 +1,15 @@
+上节课讲了 Multi-Agent 协作，但所有 Agent 都在同一个 LangGraph 图里。那如果你公司的报销 Agent 要调用财务部门的审批 Agent，两个 Agent 运行在不同系统不同框架上呢？MCP 管不了这个——MCP 是让 Agent 调用被动的工具，而 Agent 不是被动的工具，它有自己的推理能力、自己的状态、处理可能要好几分钟。这就需要一个 Agent 间通信的协议——A2A。
+
+A2A，Agent-to-Agent，Google 2025 年 4 月推出，2026 年 3 月发布 v1.0 正式版，Linux Foundation 托管。一句话定位：MCP 是插件接口，A2A 是外交协议。MCP 管你的 Agent 怎么"使用"工具，A2A 管你的 Agent 怎么"委托"另一个 Agent 做事。两者不是竞争是互补——MCP 管纵向连接，A2A 管横向协作。
+
+A2A 有三个核心概念你必须知道。第一个是 Agent Card，Agent 的名片。每个 Agent 发布一个 JSON 文件到固定路径，描述自己叫什么、能干什么、怎么认证。其他 Agent 通过这个名片发现它、了解它的能力。
+
+第二个是 Task，任务。A2A 中所有协作围绕 Task 展开。Task 有完整的生命周期——submitted 已提交、working 处理中、completed 完成、failed 失败。关键的是还有一个 input-required 状态——Agent 处理到一半发现信息不够，暂停任务请求补充信息，Client 补充后 Task 继续执行。这就是多轮交互，和 MCP 的"调一次返一次"完全不同。
+
+第三个是 Message 和 Artifact。Message 是 Agent 之间的对话消息，用于协商和交互。Artifact 是任务的最终产出物——比如审批结果文档、生成的报告。每个 Message 和 Artifact 由 Part 组成，Part 可以是文本、文件或结构化数据。
+
+通信上 A2A 基于 JSON-RPC 2.0，核心操作就几个：message/send 发送消息创建或推进 Task，message/stream 流式接收响应，tasks/get 查询状态。认证走 OAuth 2.1——因为跨系统协作安全要求比 MCP 高得多。
+
+面试问到 A2A 和 MCP 的区别，标准答法是这样：MCP 的对象是被动的工具，无状态，即调即返；A2A 的对象是有自主性的 Agent，有状态，支持长时间处理和多轮交互。一个完整的企业 AI 系统两者都需要——Agent 用 MCP 接数据库和 API，用 A2A 与其他部门的 Agent 协作。面试别说"A2A 替代 MCP"，它们不在同一个维度。
+
+到这里阶段 3 所有知识点讲完了。下节课我们把 LangGraph、MCP、Multi-Agent 全拼在一起，做一个能写进简历的完整项目。关注我，下节见。

@@ -1,0 +1,15 @@
+前六节课我们讲了 LangChain、LangGraph、MCP、Multi-Agent、A2A——全是概念和单个知识点。面试官不会只考概念，他一定会问"你做过什么项目？"这节课就是给你准备这个答案的。
+
+我们要搭一个多 Agent 开发助手，架构是 Supervisor 模式。一个 Supervisor Agent 做调度，下面三个 Worker：Researcher 负责技术调研、Coder 负责写代码和自动测试、Reviewer 负责代码审查。工具层用 MCP 标准化封装——搜索工具一个 MCP Server、代码执行一个 MCP Server，换框架不用重写工具接口。
+
+先说 LangGraph 怎么搭这个图。主图用 StateGraph，Supervisor 是入口节点，条件边根据 Supervisor 的判断路由到三个 Worker。每个 Worker 执行完普通边回到 Supervisor，Supervisor 判断是继续分配还是汇总输出。Researcher 和 Coder 各用一个子图封装——子图有独立的 State，中间变量不污染主图，这就是上下文工程里 Isolate 操作的工程实现。
+
+Coder 子图有个关键设计——自我修正循环。生成代码后自动执行测试，如果测试报错就把报错信息塞回去让模型修正，最多改三轮。这就是阶段 2 讲的 Reflexion 范式的落地：生成、评估、反思、重试。
+
+Reviewer 节点加了 Human-in-the-loop。代码审查完后用 interrupt 暂停，把审查结果推给用户确认。用户说 approve 就通过，说 request changes 就清空代码让 Coder 重写。整个暂停和恢复靠 Checkpointer 自动管理状态。
+
+防死循环两层防护：State 里的迭代计数器超过十轮强制走 final_output，加上 LangGraph 的 recursion_limit 兜底。
+
+这个项目覆盖了阶段 3 面试最高频的六个考点：LangGraph 状态图编排、子图封装、Human-in-the-loop、MCP 工具标准化、Supervisor 多 Agent 调度、Checkpointer 持久化。面试时讲架构用三十秒画出 Supervisor 加三个 Worker 的图，讲实现细节挑 Coder 的自我修正循环和 Reviewer 的人工审批展开，讲工程决策解释为什么选 Supervisor 而不是 Swarm——因为需要集中控制和审计。
+
+到这里阶段 3 框架与协议实战全部完成。下一阶段进入 RAG 与知识工程——让你的 Agent 不仅能调工具，还能从海量文档中精准找到需要的信息。关注我，下期见。

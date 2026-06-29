@@ -1,0 +1,13 @@
+你的 Agent 接了搜索引擎、数据库、文件系统、GitHub 四个工具，每个都自己写了一套接口代码。现在换个框架，四个工具的接口全要重写。面试官问你"有没有更好的方式？"你说没想过。他提了三个字母——MCP。
+
+MCP，Model Context Protocol，Anthropic 2024 年底推出的开放协议，一句话说就是 AI 工具调用的 USB-C 接口。没有 MCP 之前，N 个工具对接 M 个框架需要 N 乘以 M 种适配代码。有了 MCP，工具方实现一个 MCP Server，框架方对接一次 MCP Client，N 加 M 就够了。2026 年 Claude Desktop、Cursor、VS Code、ChatGPT 全都原生支持 MCP，它已经是工具接入的事实标准。
+
+MCP Server 暴露三种能力给 Client。第一种是 Tools——模型可以调用的函数，比如搜索、查数据库，控制权归模型，模型决定什么时候调。第二种是 Resources——给模型提供上下文数据，比如文件内容、配置信息，控制权归应用端或用户。第三种是 Prompts——预定义的交互模板，控制权归用户选择。三种能力、三种控制权，面试问到 MCP 能力模型答出这个就过关了。
+
+那 MCP 和 Function Calling 什么关系？很多人搞混。Function Calling 是模型层面的机制——让模型能输出结构化的工具调用请求。MCP 是应用层面的标准——解决工具从哪来、怎么发现、怎么安全通信。你可以理解为 MCP 的 tools/call 底层用的就是 Function Calling，两者不在同一层。面试别说"MCP 替代了 Function Calling"，它们是不同层的东西。
+
+通信上 MCP 基于 JSON-RPC 2.0，两种传输方式：stdio 用于本地 Server，Client 和 Server 在同一台机器通过标准输入输出通信，配置简单；Streamable HTTP 用于远程 Server，支持跨网络和流式推送，2026 年推荐搭配 OAuth 2.1 做认证。
+
+开发一个 MCP Server 有多简单？用 FastMCP 这个官方 SDK，一个装饰器加一个函数就是一个工具。安全上记住两条硬规则：一是 Server 端必须做参数校验——模型输出的参数虽然有 schema 约束类型，但值可能是恶意的，本质上是不可信的外部输入；二是敏感操作必须有用户确认机制，不能模型说删文件就直接删。
+
+MCP 解决了"Agent 怎么连工具"。那多个 Agent 之间怎么分工和通信？一个搜索一个写代码一个审查，谁来调度谁来兜底？这就是 Multi-Agent 协作，下节课的内容。关注我，下节见。

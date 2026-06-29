@@ -1,0 +1,9 @@
+面试官问你"项目里用了什么框架"，你说"LangChain"，他追一句"那 LangChain 和 LangGraph 什么关系？"你答不上来，这轮基本就凉了。2026 年 92% 的 Agent 岗位 JD 里写着要求 LangGraph，但几乎所有人学 Agent 的第一站还是 LangChain。到底还要不要学它？哪些该用哪些该绕开？
+
+先搞清楚 LangChain 现在是什么。2022 年 Harrison Chase 发布它的时候，它是唯一一个把大模型串成应用的框架，什么都往里塞——Prompt 管理、模型调用、Agent 循环、RAG 检索、工具集成全在一个包里。这带来两个问题：API 频繁变动让开发者苦不堪言，Agent 那部分的 AgentExecutor 又是个黑盒，出了问题调不动。所以 2024 年 LangChain 做了一件关键的事——拆包。核心抽象抽进 langchain-core，社区集成丢到 langchain-community，Agent 编排独立成了 LangGraph。到了 2026 年，定位已经非常清晰：LangChain 是基础设施层，管模型抽象、Prompt 模板和输出解析；LangGraph 是 Agent 编排层，管状态图、循环和人工介入。两者不是替代关系，是分层协作。
+
+那 LangChain 里到底哪些值得用？三样东西。第一，模型抽象——ChatOpenAI、ChatAnthropic 这些类统一了不同模型的调用接口，换模型改一行代码不动业务逻辑。第二，LCEL 管道——用管道符把 Prompt、模型、解析器串起来，一条链自动支持同步、异步、流式、批量四种调用模式，不用你自己写四份代码。第三，社区集成——几百个现成的向量库、搜索引擎、文档加载器连接器，不用你从头对接 API。
+
+那该绕开什么？AgentExecutor，LangChain 早期的 Agent 实现，本质就是一个 while 循环加工具调用。问题在于循环控制粒度粗、中间状态看不到、不支持人工介入、不支持条件分支——出了 bug 你连 Agent 在第几步想了什么都查不到。还有 RetrievalQA、ConversationalChain 这类高层封装链，把 RAG 和对话简化得太狠，真出问题你根本不知道哪层出的。原则就一句话：用 LangChain 的抽象层和连接器，不用它的高层封装链。
+
+面试的标准答法是这样的：我用 LangChain 的模型抽象和 Prompt 模板作为基础设施，用 LangGraph 做 Agent 的状态图编排——一句话就展示了你对整个生态的理解深度。那 LangGraph 到底怎么写？状态图、节点、边这些概念落到代码里是什么样？下节课我们直接上手 LangGraph 核心。关注我，下节见。

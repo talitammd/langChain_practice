@@ -1,0 +1,15 @@
+面试官看你简历上写着"设计了多 Agent 协作系统"，问你"多个 Agent 之间怎么分工？谁来调度？一个 Agent 出错了谁来兜底？"你一句都答不上来，这轮就废了。Multi-Agent 是 2026 年 Agent 工程师面试的高频考区，今天把三大架构模式全拆一遍。
+
+先说为什么要多个 Agent。一个 Agent 承担搜索加编码加审查，System Prompt 越来越长、能力互相冲突、出错了不知道哪个环节的问题。拆成多个专精 Agent 各管一块——上下文隔离、职责清晰、可以并行工作、还能独立测试。核心问题不是怎么做 Agent，而是多个 Agent 之间怎么分工、怎么通信、谁来兜底。
+
+三种架构模式。第一种是 Supervisor，监督者模式，也是面试最常考的。一个 Supervisor Agent 接收用户任务，自己决定分配给哪个 Worker——搜索任务给 Searcher、编码任务给 Coder、审查任务给 Reviewer。Worker 干完了结果交回 Supervisor，Supervisor 判断是继续分配还是汇总输出。在 LangGraph 里实现就是 Supervisor 作为一个节点，条件边连到各个 Worker 节点，Worker 执行完普通边回到 Supervisor。优势是控制集中、流程透明、易监控；劣势是 Supervisor 本身是单点瓶颈，每次路由多一轮 LLM 调用。
+
+第二种是 Swarm，群体模式。没有中央调度员，每个 Agent 自己决定干完后交给谁。Agent A 搜索完了觉得该写代码了，直接 Handoff 给 Agent B，B 写完觉得该审查了 Handoff 给 C。在 LangGraph 里用 Command(goto=target) 实现交接。优势是去中心化、延迟低、不经过中间人；劣势是流程不透明，Agent 之间可能踢皮球——A 交给 B，B 交回 A，无限循环。所以必须加交接计数器做兜底。
+
+第三种是 Hierarchical，层级模式。Supervisor 的扩展——顶层 Supervisor 管多个中层 Supervisor，中层各管一组 Worker。适合 Agent 特别多、任务特别复杂的场景。每一层 Supervisor 用 LangGraph 的子图实现，状态隔离、独立管理。
+
+怎么选？大多数场景 Supervisor 就够了。流程固定且角色明确的用 Swarm 省开销。Agent 超过十个或者有明确的组织架构才考虑 Hierarchical。面试别一上来就说要用最复杂的架构，先问清楚场景再选方案才是真正的工程思维。
+
+工程上还有三个坑必须提。第一是状态管理——所有 Agent 共享 messages 会导致上下文爆炸，生产中用子图做隔离，Agent 之间只传任务描述和结果摘要。第二是死循环控制——交接计数器加 recursion_limit 双重防护。第三是结果汇总——多个 Agent 各自产出的结果要有人整合，Supervisor 自己做或者单独加一个 Aggregator 节点。
+
+Multi-Agent 到这讲的都是同一个系统内部的协作。那两个 Agent 运行在不同系统、不同框架、甚至不同公司呢？它们之间怎么通信？这就需要跨系统的 Agent 间通信协议——A2A。下节课我们拆 A2A 协议。关注我，下节见。

@@ -1,0 +1,99 @@
+面试官问你"项目里用了什么框架"，你说"LangChain"，他追一句"那 LangChain 和 LangGraph 什么关系？"你答不上来，这轮基本就凉了。2026 年 92% 的 Agent 岗位 JD 里写着要求 LangGraph，但几乎所有人学 Agent 的第一站还是 LangChain。到底还要不要学它？哪些该用哪些该绕开？
+
+先搞清楚 LangChain 现在是什么。2022 年 Harrison Chase 发布它的时候，它是唯一一个把大模型串成应用的框架，什么都往里塞——Prompt 管理、模型调用、Agent 循环、RAG 检索、工具集成全在一个包里。这带来两个问题：API 频繁变动让开发者苦不堪言，Agent 那部分的 AgentExecutor 又是个黑盒，出了问题调不动。所以 2024 年 LangChain 做了一件关键的事——拆包。核心抽象抽进 langchain-core，社区集成丢到 langchain-community，Agent 编排独立成了 LangGraph。到了 2026 年，定位已经非常清晰：LangChain 是基础设施层，管模型抽象、Prompt 模板和输出解析；LangGraph 是 Agent 编排层，管状态图、循环和人工介入。两者不是替代关系，是分层协作。
+
+那 LangChain 里到底哪些值得用？三样东西。第一，模型抽象——ChatOpenAI、ChatAnthropic 这些类统一了不同模型的调用接口，换模型改一行代码不动业务逻辑。第二，LCEL 管道——用管道符把 Prompt、模型、解析器串起来，一条链自动支持同步、异步、流式、批量四种调用模式，不用你自己写四份代码。第三，社区集成——几百个现成的向量库、搜索引擎、文档加载器连接器，不用你从头对接 API。
+
+那该绕开什么？AgentExecutor，LangChain 早期的 Agent 实现，本质就是一个 while 循环加工具调用。问题在于循环控制粒度粗、中间状态看不到、不支持人工介入、不支持条件分支——出了 bug 你连 Agent 在第几步想了什么都查不到。还有 RetrievalQA、ConversationalChain 这类高层封装链，把 RAG 和对话简化得太狠，真出问题你根本不知道哪层出的。原则就一句话：用 LangChain 的抽象层和连接器，不用它的高层封装链。
+
+面试的标准答法是这样的：我用 LangChain 的模型抽象和 Prompt 模板作为基础设施，用 LangGraph 做 Agent 的状态图编排——一句话就展示了你对整个生态的理解深度。那 LangGraph 到底怎么写？状态图、节点、边这些概念落到代码里是什么样？
+
+面试官让你手写一个 Agent，你用 while 循环加工具调用撸了一版跑通了，面试官追一句"这个循环跑到一半进程崩了怎么办？"你想了想说"重新跑"。面试官又问"关键操作你想暂停等人确认呢？"你说"那加个 input 等用户输入"。面试官笑了一下——他想考的其实是 LangGraph。
+
+LangGraph 做了一件事：把你脑子里隐式的循环逻辑变成一张显式的状态图。这张图有三个核心概念。第一个是 State，状态，就是一个 TypedDict 或 Pydantic 模型，定义了 Agent 在运行过程中需要跟踪的所有数据——对话历史、当前步骤、工具调用次数。所有节点共享这份状态，谁处理完了就把自己那部分更新回去。这里有个精华设计叫 reducer，比如对话历史这个字段你肯定希望新消息是追加进去而不是覆盖掉前面的，add_messages 这个 reducer 就干这件事。
+
+第二个概念是 Node，节点。节点就是普通的 Python 函数，接收当前 State 作为参数，返回你想更新的字段。一个典型的 Agent 图至少有两个节点：Agent 节点调 LLM 生成回复，Tools 节点执行工具调用。节点不需要返回完整 State，只返回变化的部分，LangGraph 自动用 reducer 合并。
+
+第三个是 Edge，边。边定义了节点之间的流转规则。普通边是无条件连接，A 执行完一定走 B。条件边是根据当前状态动态决定下一步走哪个节点——比如 Agent 节点执行完，如果返回了工具调用就走 Tools 节点，没有就走 END 结束。条件边的判断函数就是一个普通 Python 函数，返回节点名称的字符串。
+
+把这三个概念拼起来，一个 ReAct Agent 的图长这样：入口进 Agent 节点调 LLM，条件边判断有没有工具调用，有就走 Tools 节点执行工具，Tools 执行完一条普通边回到 Agent 节点继续循环，直到 Agent 不再调工具、条件边走到 END。和 while 循环比，每一步都可以在 stream 模式下实时观察，每一步的状态都被 Checkpointer 自动保存。
+
+Checkpointer 就是面试官想考的重点——进程崩了怎么办。你给 graph.compile 传一个 Checkpointer，运行时指定 thread_id 标识会话，LangGraph 每执行完一个节点就自动把 State 快照存下来。进程崩了重启，同一个 thread_id 继续调用，自动从上次的节点恢复。生产中 Checkpointer 用 PostgreSQL 做持久化，不用你自己管状态序列化和恢复逻辑。
+
+面试答到这三层——State 定义数据、Node 定义行为、Edge 定义流转、Checkpointer 做持久化——面试官就知道你不是只会调 API。但到目前为止图还很简单，真实场景要处理条件分支、循环控制、人工介入。
+
+上节课我们用 LangGraph 写了一个 ReAct Agent，图结构很清晰——Agent 节点调模型，条件边判断有没有工具调用，有就走 Tools 节点执行完再回来。但如果你拿这个去面试，面试官一定会追："你的 Agent 要删文件，你让它直接删了？"这就考到了 Human-in-the-loop，人工介入。
+
+LangGraph 用一个函数解决这件事——interrupt。在工具节点里，执行到危险操作时你调 interrupt，传入一个描述（比如"确认要删除 /tmp/test.txt 吗？"），图的执行就暂停在这个点。因为有 Checkpointer，当前状态被自动保存。你的应用把这个确认请求推给用户，用户点了"确认"或"拒绝"，你用 Command(resume="yes") 恢复图执行，图从中断点继续。整个过程不需要你自己管状态序列化，Checkpointer 全包了。
+
+这就引出了人工介入的三种模式。第一种是审批模式，刚才讲的，危险操作前暂停等确认。第二种是编辑模式，Agent 生成了一份邮件草稿，你不满意可以直接改内容再让它继续发送——人修改的是 State 里的数据。第三种是反馈模式，Agent 的输出不够好，你给它一段文字反馈塞回 messages，Agent 根据反馈重新生成。三种模式底层都是 interrupt 加 Checkpointer，区别在于恢复时传回去的是确认信号、修改后的数据还是反馈文本。
+
+那条件分支呢？上节只有"去 Tools"和"去 END"两条路。真实场景你可能需要根据任务类型走完全不同的处理流程——研究类任务去搜索和总结，编程类任务去生成代码和测试，通用问题直接对话。条件边的路由函数返回节点名称字符串，多路分支就多写几个 return 分支。2025 年新出的 Command API 更优雅——节点直接返回 Command 对象，同时指定状态更新和下一个去哪个节点，不用单独写路由函数。
+
+图大了怎么办？子图。把"搜索加总结"封装成一个子图，有自己独立的 State 定义和节点，主图调用时当作一个普通节点用。子图最大的好处是状态隔离——子图内部的中间变量不会污染主图的 State，这正是上下文工程里 Isolate 操作的工程实现。
+
+循环控制也要讲一句。Agent 如果陷入死循环——工具一直失败一直重试——会无限烧 token。两层防护：State 里加计数器做细粒度控制，比如工具调用超过五次就强制结束；同时 LangGraph 有全局的 recursion_limit 做兜底，节点执行总次数到上限就停。
+
+掌握了条件分支、Human-in-the-loop 和子图，你就有能力用 LangGraph 搭建生产级 Agent 系统了。但 Agent 要干活得连工具，每个工具都自己写接口太累了——有没有标准化的协议让 Agent 即插即用地接入任何工具？有，它叫 MCP。
+
+你的 Agent 接了搜索引擎、数据库、文件系统、GitHub 四个工具，每个都自己写了一套接口代码。现在换个框架，四个工具的接口全要重写。面试官问你"有没有更好的方式？"你说没想过。他提了三个字母——MCP。
+
+MCP，Model Context Protocol，Anthropic 2024 年底推出的开放协议，一句话说就是 AI 工具调用的 USB-C 接口。没有 MCP 之前，N 个工具对接 M 个框架需要 N 乘以 M 种适配代码。有了 MCP，工具方实现一个 MCP Server，框架方对接一次 MCP Client，N 加 M 就够了。2026 年 Claude Desktop、Cursor、VS Code、ChatGPT 全都原生支持 MCP，它已经是工具接入的事实标准。
+
+MCP Server 暴露三种能力给 Client。第一种是 Tools——模型可以调用的函数，比如搜索、查数据库，控制权归模型，模型决定什么时候调。第二种是 Resources——给模型提供上下文数据，比如文件内容、配置信息，控制权归应用端或用户。第三种是 Prompts——预定义的交互模板，控制权归用户选择。三种能力、三种控制权，面试问到 MCP 能力模型答出这个就过关了。
+
+那 MCP 和 Function Calling 什么关系？很多人搞混。Function Calling 是模型层面的机制——让模型能输出结构化的工具调用请求。MCP 是应用层面的标准——解决工具从哪来、怎么发现、怎么安全通信。你可以理解为 MCP 的 tools/call 底层用的就是 Function Calling，两者不在同一层。面试别说"MCP 替代了 Function Calling"，它们是不同层的东西。
+
+通信上 MCP 基于 JSON-RPC 2.0，两种传输方式：stdio 用于本地 Server，Client 和 Server 在同一台机器通过标准输入输出通信，配置简单；Streamable HTTP 用于远程 Server，支持跨网络和流式推送，2026 年推荐搭配 OAuth 2.1 做认证。
+
+开发一个 MCP Server 有多简单？用 FastMCP 这个官方 SDK，一个装饰器加一个函数就是一个工具。安全上记住两条硬规则：一是 Server 端必须做参数校验——模型输出的参数虽然有 schema 约束类型，但值可能是恶意的，本质上是不可信的外部输入；二是敏感操作必须有用户确认机制，不能模型说删文件就直接删。
+
+MCP 解决了"Agent 怎么连工具"。那多个 Agent 之间怎么分工和通信？一个搜索一个写代码一个审查，谁来调度谁来兜底？
+
+面试官看你简历上写着"设计了多 Agent 协作系统"，问你"多个 Agent 之间怎么分工？谁来调度？一个 Agent 出错了谁来兜底？"你一句都答不上来，这轮就废了。Multi-Agent 是 2026 年 Agent 工程师面试的高频考区，今天把三大架构模式全拆一遍。
+
+先说为什么要多个 Agent。一个 Agent 承担搜索加编码加审查，System Prompt 越来越长、能力互相冲突、出错了不知道哪个环节的问题。拆成多个专精 Agent 各管一块——上下文隔离、职责清晰、可以并行工作、还能独立测试。核心问题不是怎么做 Agent，而是多个 Agent 之间怎么分工、怎么通信、谁来兜底。
+
+三种架构模式。第一种是 Supervisor，监督者模式，也是面试最常考的。一个 Supervisor Agent 接收用户任务，自己决定分配给哪个 Worker——搜索任务给 Searcher、编码任务给 Coder、审查任务给 Reviewer。Worker 干完了结果交回 Supervisor，Supervisor 判断是继续分配还是汇总输出。在 LangGraph 里实现就是 Supervisor 作为一个节点，条件边连到各个 Worker 节点，Worker 执行完普通边回到 Supervisor。优势是控制集中、流程透明、易监控；劣势是 Supervisor 本身是单点瓶颈，每次路由多一轮 LLM 调用。
+
+第二种是 Swarm，群体模式。没有中央调度员，每个 Agent 自己决定干完后交给谁。Agent A 搜索完了觉得该写代码了，直接 Handoff 给 Agent B，B 写完觉得该审查了 Handoff 给 C。在 LangGraph 里用 Command(goto=target) 实现交接。优势是去中心化、延迟低、不经过中间人；劣势是流程不透明，Agent 之间可能踢皮球——A 交给 B，B 交回 A，无限循环。所以必须加交接计数器做兜底。
+
+第三种是 Hierarchical，层级模式。Supervisor 的扩展——顶层 Supervisor 管多个中层 Supervisor，中层各管一组 Worker。适合 Agent 特别多、任务特别复杂的场景。每一层 Supervisor 用 LangGraph 的子图实现，状态隔离、独立管理。
+
+怎么选？大多数场景 Supervisor 就够了。流程固定且角色明确的用 Swarm 省开销。Agent 超过十个或者有明确的组织架构才考虑 Hierarchical。面试别一上来就说要用最复杂的架构，先问清楚场景再选方案才是真正的工程思维。
+
+工程上还有三个坑必须提。第一是状态管理——所有 Agent 共享 messages 会导致上下文爆炸，生产中用子图做隔离，Agent 之间只传任务描述和结果摘要。第二是死循环控制——交接计数器加 recursion_limit 双重防护。第三是结果汇总——多个 Agent 各自产出的结果要有人整合，Supervisor 自己做或者单独加一个 Aggregator 节点。
+
+Multi-Agent 到这讲的都是同一个系统内部的协作。那两个 Agent 运行在不同系统、不同框架、甚至不同公司呢？它们之间怎么通信？
+
+上节课讲了 Multi-Agent 协作，但所有 Agent 都在同一个 LangGraph 图里。那如果你公司的报销 Agent 要调用财务部门的审批 Agent，两个 Agent 运行在不同系统不同框架上呢？MCP 管不了这个——MCP 是让 Agent 调用被动的工具，而 Agent 不是被动的工具，它有自己的推理能力、自己的状态、处理可能要好几分钟。这就需要一个 Agent 间通信的协议——A2A。
+
+A2A，Agent-to-Agent，Google 2025 年 4 月推出，2026 年 3 月发布 v1.0 正式版，Linux Foundation 托管。一句话定位：MCP 是插件接口，A2A 是外交协议。MCP 管你的 Agent 怎么"使用"工具，A2A 管你的 Agent 怎么"委托"另一个 Agent 做事。两者不是竞争是互补——MCP 管纵向连接，A2A 管横向协作。
+
+A2A 有三个核心概念你必须知道。第一个是 Agent Card，Agent 的名片。每个 Agent 发布一个 JSON 文件到固定路径，描述自己叫什么、能干什么、怎么认证。其他 Agent 通过这个名片发现它、了解它的能力。
+
+第二个是 Task，任务。A2A 中所有协作围绕 Task 展开。Task 有完整的生命周期——submitted 已提交、working 处理中、completed 完成、failed 失败。关键的是还有一个 input-required 状态——Agent 处理到一半发现信息不够，暂停任务请求补充信息，Client 补充后 Task 继续执行。这就是多轮交互，和 MCP 的"调一次返一次"完全不同。
+
+第三个是 Message 和 Artifact。Message 是 Agent 之间的对话消息，用于协商和交互。Artifact 是任务的最终产出物——比如审批结果文档、生成的报告。每个 Message 和 Artifact 由 Part 组成，Part 可以是文本、文件或结构化数据。
+
+通信上 A2A 基于 JSON-RPC 2.0，核心操作就几个：message/send 发送消息创建或推进 Task，message/stream 流式接收响应，tasks/get 查询状态。认证走 OAuth 2.1——因为跨系统协作安全要求比 MCP 高得多。
+
+面试问到 A2A 和 MCP 的区别，标准答法是这样：MCP 的对象是被动的工具，无状态，即调即返；A2A 的对象是有自主性的 Agent，有状态，支持长时间处理和多轮交互。一个完整的企业 AI 系统两者都需要——Agent 用 MCP 接数据库和 API，用 A2A 与其他部门的 Agent 协作。面试别说"A2A 替代 MCP"，它们不在同一个维度。
+
+到这里所有知识点讲完了。最后一节我们把 LangGraph、MCP、Multi-Agent 全拼在一起，做一个能写进简历的完整项目。
+
+前六节课我们讲了 LangChain、LangGraph、MCP、Multi-Agent、A2A——全是概念和单个知识点。面试官不会只考概念，他一定会问"你做过什么项目？"这节课就是给你准备这个答案的。
+
+我们要搭一个多 Agent 开发助手，架构是 Supervisor 模式。一个 Supervisor Agent 做调度，下面三个 Worker：Researcher 负责技术调研、Coder 负责写代码和自动测试、Reviewer 负责代码审查。工具层用 MCP 标准化封装——搜索工具一个 MCP Server、代码执行一个 MCP Server，换框架不用重写工具接口。
+
+先说 LangGraph 怎么搭这个图。主图用 StateGraph，Supervisor 是入口节点，条件边根据 Supervisor 的判断路由到三个 Worker。每个 Worker 执行完普通边回到 Supervisor，Supervisor 判断是继续分配还是汇总输出。Researcher 和 Coder 各用一个子图封装——子图有独立的 State，中间变量不污染主图，这就是上下文工程里 Isolate 操作的工程实现。
+
+Coder 子图有个关键设计——自我修正循环。生成代码后自动执行测试，如果测试报错就把报错信息塞回去让模型修正，最多改三轮。这就是阶段 2 讲的 Reflexion 范式的落地：生成、评估、反思、重试。
+
+Reviewer 节点加了 Human-in-the-loop。代码审查完后用 interrupt 暂停，把审查结果推给用户确认。用户说 approve 就通过，说 request changes 就清空代码让 Coder 重写。整个暂停和恢复靠 Checkpointer 自动管理状态。
+
+防死循环两层防护：State 里的迭代计数器超过十轮强制走 final_output，加上 LangGraph 的 recursion_limit 兜底。
+
+这个项目覆盖了阶段 3 面试最高频的六个考点：LangGraph 状态图编排、子图封装、Human-in-the-loop、MCP 工具标准化、Supervisor 多 Agent 调度、Checkpointer 持久化。面试时讲架构用三十秒画出 Supervisor 加三个 Worker 的图，讲实现细节挑 Coder 的自我修正循环和 Reviewer 的人工审批展开，讲工程决策解释为什么选 Supervisor 而不是 Swarm——因为需要集中控制和审计。
+
+七个追问全拆完了。面试官从头到尾沿着"LangChain 定位 → LangGraph 编排 → 进阶控制 → MCP 工具标准化 → Multi-Agent 协作 → A2A 跨系统 → 项目实战"这条链路，一步步验证你是真懂框架和协议还是只会调 API。这七块就是 Agent 工程师的工程骨架，阶段 2 的范式是内功，这一阶段是把内功落地到生产框架上的武器。下一阶段进入 RAG 与知识工程——让你的 Agent 不仅能调工具，还能从海量文档中精准找到需要的信息。关注我，下期见。
